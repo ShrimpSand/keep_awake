@@ -3,12 +3,14 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 
 interface WakeLockState {
+  isSupported: boolean;
   isActive: boolean;
   error: string | null;
 }
 
 export function useWakeLock() {
   const [state, setState] = useState<WakeLockState>({
+    isSupported: false, // Will be updated on client
     isActive: false,
     error: null,
   });
@@ -17,9 +19,11 @@ export function useWakeLock() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
 
-  // Check PiP support
-  const isSupported =
-    typeof document !== "undefined" && "pictureInPictureEnabled" in document;
+  // Check PiP support on client side only
+  useEffect(() => {
+    const supported = "pictureInPictureEnabled" in document;
+    setState((prev) => ({ ...prev, isSupported: supported }));
+  }, []);
 
   // Create minimal video stream from canvas
   const createVideoStream = useCallback(() => {
@@ -61,11 +65,11 @@ export function useWakeLock() {
 
   // Start PiP
   const requestWakeLock = useCallback(async () => {
-    if (!isSupported) {
-      setState({
-        isActive: false,
+    if (!state.isSupported) {
+      setState((prev) => ({
+        ...prev,
         error: "このブラウザはPicture-in-Pictureをサポートしていません",
-      });
+      }));
       return false;
     }
 
@@ -74,7 +78,7 @@ export function useWakeLock() {
       if (!videoRef.current) {
         const video = createVideoStream();
         if (!video) {
-          setState({ isActive: false, error: "動画ストリームの作成に失敗しました" });
+          setState((prev) => ({ ...prev, error: "動画ストリームの作成に失敗しました" }));
           return false;
         }
         videoRef.current = video;
@@ -91,15 +95,15 @@ export function useWakeLock() {
         setState((prev) => ({ ...prev, isActive: false }));
       });
 
-      setState({ isActive: true, error: null });
+      setState((prev) => ({ ...prev, isActive: true, error: null }));
       return true;
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "PiPの開始に失敗しました";
-      setState({ isActive: false, error: errorMessage });
+      setState((prev) => ({ ...prev, isActive: false, error: errorMessage }));
       return false;
     }
-  }, [isSupported, createVideoStream]);
+  }, [state.isSupported, createVideoStream]);
 
   // Stop PiP
   const releaseWakeLock = useCallback(async () => {
@@ -125,12 +129,12 @@ export function useWakeLock() {
         canvasRef.current = null;
       }
 
-      setState({ isActive: false, error: null });
+      setState((prev) => ({ ...prev, isActive: false, error: null }));
       return true;
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "PiPの終了に失敗しました";
-      setState({ isActive: false, error: errorMessage });
+      setState((prev) => ({ ...prev, isActive: false, error: errorMessage }));
       return false;
     }
   }, []);
@@ -162,7 +166,6 @@ export function useWakeLock() {
   }, []);
 
   return {
-    isSupported,
     ...state,
     requestWakeLock,
     releaseWakeLock,
