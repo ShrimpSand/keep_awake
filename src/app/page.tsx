@@ -20,13 +20,6 @@ export default function Home() {
           ボタンをクリックしてON/OFFを切り替えてください。
         </p>
 
-        {!isSupported && (
-          <div className="bg-yellow-500/20 border border-yellow-500 text-yellow-300 px-4 py-3 rounded-lg">
-            このブラウザはWake Lock APIをサポートしていません。
-            <br />
-            Chrome, Edge, または Safari をお試しください。
-          </div>
-        )}
 
         <button
           onClick={toggleWakeLock}
@@ -80,9 +73,9 @@ export default function Home() {
 
         <div className="mt-8 text-slate-500 text-sm text-center max-w-md">
           <p>
-            このアプリはScreen Wake Lock APIを使用しています。
+            ONにするとPiPウィンドウが表示され、
             <br />
-            タブを閉じるか、OFFにすることで通常のスリープ動作に戻ります。
+            常に最前面で画面スリープを防止します。
           </p>
         </div>
       </main>

@@ -1,74 +1,141 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
 interface WakeLockState {
-  isSupported: boolean;
   isActive: boolean;
   error: string | null;
 }
 
 export function useWakeLock() {
   const [state, setState] = useState<WakeLockState>({
-    isSupported: false,
     isActive: false,
     error: null,
   });
 
-  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animationRef = useRef<number | null>(null);
 
-  // Check if Wake Lock API is supported
-  useEffect(() => {
-    const isSupported = "wakeLock" in navigator;
-    setState((prev) => ({ ...prev, isSupported }));
+  // Check PiP support
+  const isSupported =
+    typeof document !== "undefined" && "pictureInPictureEnabled" in document;
+
+  // Create minimal video stream from canvas
+  const createVideoStream = useCallback(() => {
+    // Create tiny canvas (smallest practical size)
+    const canvas = document.createElement("canvas");
+    canvas.width = 2;
+    canvas.height = 2;
+    canvasRef.current = canvas;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    // Draw minimal content (just a dot that changes slightly to keep stream active)
+    let frame = 0;
+    const draw = () => {
+      // Alternate between two very similar colors to keep the stream "active"
+      const shade = frame % 2 === 0 ? 30 : 31;
+      ctx.fillStyle = `rgb(${shade}, ${shade}, ${shade})`;
+      ctx.fillRect(0, 0, 2, 2);
+      frame++;
+      animationRef.current = requestAnimationFrame(draw);
+    };
+    draw();
+
+    // Create video element
+    const video = document.createElement("video");
+    video.srcObject = canvas.captureStream(1); // 1 FPS for minimal resource usage
+    video.muted = true;
+    video.playsInline = true;
+    video.style.position = "fixed";
+    video.style.opacity = "0";
+    video.style.pointerEvents = "none";
+    video.style.width = "1px";
+    video.style.height = "1px";
+    document.body.appendChild(video);
+
+    return video;
   }, []);
 
-  // Request wake lock
+  // Start PiP
   const requestWakeLock = useCallback(async () => {
-    if (!("wakeLock" in navigator)) {
-      setState((prev) => ({
-        ...prev,
-        error: "Wake Lock API is not supported in this browser",
-      }));
+    if (!isSupported) {
+      setState({
+        isActive: false,
+        error: "このブラウザはPicture-in-Pictureをサポートしていません",
+      });
       return false;
     }
 
     try {
-      wakeLockRef.current = await navigator.wakeLock.request("screen");
+      // Create video if not exists
+      if (!videoRef.current) {
+        const video = createVideoStream();
+        if (!video) {
+          setState({ isActive: false, error: "動画ストリームの作成に失敗しました" });
+          return false;
+        }
+        videoRef.current = video;
+      }
 
-      wakeLockRef.current.addEventListener("release", () => {
+      // Play video (required before PiP)
+      await videoRef.current.play();
+
+      // Request PiP
+      await videoRef.current.requestPictureInPicture();
+
+      // Listen for PiP exit
+      videoRef.current.addEventListener("leavepictureinpicture", () => {
         setState((prev) => ({ ...prev, isActive: false }));
       });
 
-      setState((prev) => ({ ...prev, isActive: true, error: null }));
+      setState({ isActive: true, error: null });
       return true;
     } catch (err) {
       const errorMessage =
-        err instanceof Error ? err.message : "Failed to request wake lock";
-      setState((prev) => ({ ...prev, error: errorMessage, isActive: false }));
+        err instanceof Error ? err.message : "PiPの開始に失敗しました";
+      setState({ isActive: false, error: errorMessage });
+      return false;
+    }
+  }, [isSupported, createVideoStream]);
+
+  // Stop PiP
+  const releaseWakeLock = useCallback(async () => {
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      }
+
+      // Cleanup
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+      }
+
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+        videoRef.current.remove();
+        videoRef.current = null;
+      }
+
+      if (canvasRef.current) {
+        canvasRef.current = null;
+      }
+
+      setState({ isActive: false, error: null });
+      return true;
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "PiPの終了に失敗しました";
+      setState({ isActive: false, error: errorMessage });
       return false;
     }
   }, []);
 
-  // Release wake lock
-  const releaseWakeLock = useCallback(async () => {
-    if (wakeLockRef.current) {
-      try {
-        await wakeLockRef.current.release();
-        wakeLockRef.current = null;
-        setState((prev) => ({ ...prev, isActive: false, error: null }));
-        return true;
-      } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : "Failed to release wake lock";
-        setState((prev) => ({ ...prev, error: errorMessage }));
-        return false;
-      }
-    }
-    return true;
-  }, []);
-
-  // Toggle wake lock
+  // Toggle
   const toggleWakeLock = useCallback(async () => {
     if (state.isActive) {
       return releaseWakeLock();
@@ -77,35 +144,25 @@ export function useWakeLock() {
     }
   }, [state.isActive, requestWakeLock, releaseWakeLock]);
 
-  // Re-acquire wake lock when page becomes visible again
-  useEffect(() => {
-    const handleVisibilityChange = async () => {
-      if (
-        document.visibilityState === "visible" &&
-        state.isActive &&
-        !wakeLockRef.current
-      ) {
-        await requestWakeLock();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [state.isActive, requestWakeLock]);
-
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (wakeLockRef.current) {
-        wakeLockRef.current.release();
+      if (document.pictureInPictureElement) {
+        document.exitPictureInPicture().catch(() => {});
+      }
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+        videoRef.current.remove();
       }
     };
   }, []);
 
   return {
+    isSupported,
     ...state,
     requestWakeLock,
     releaseWakeLock,
